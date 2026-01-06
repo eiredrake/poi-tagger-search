@@ -1,0 +1,24 @@
+# IDE
+.idea/
+.vscode/
+
+# Build artifacts
+_build/
+dist/
+build/
+
+# Package management files (if using npm/yarn)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Internal files/logs
+changelog.html
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Other temporary files
+temp/
+*.tmp
+*.log
