@@ -1,0 +1,10 @@
+{
+  "id": "poi-tagger-search",
+  "title": "Poi Tagger Search",
+  "description": "Search Tagger tags in the current scene and reveal matching POIs.",
+  "version": "0.0.1",
+  "authors": [{ "name": "eiredrake" }],
+  "minimumCoreVersion": "13",
+  "compatibleCoreVersion": "13",
+  "esmodules": ["scripts/main.js"]
+}

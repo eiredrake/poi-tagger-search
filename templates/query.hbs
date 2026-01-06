@@ -1,0 +1,12 @@
+<section>
+  <h3>{{title}}</h3>
+  <ol class="poi-tr-list">
+    {{#each rows}}
+      <li>
+        <button type="button" data-action="pan" data-note-id="{{id}}">
+          {{name}}
+        </button>
+      </li>
+    {{/each}}
+  </ol>
+</section>
