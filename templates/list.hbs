@@ -1,23 +1,35 @@
-<form class="poi-tr-root">
-  <div class="form-group">
-    <label>Tags (comma-separated)</label>
-    <input type="text" name="tags" placeholder="shop, weapon">
-  </div>
+<section class="pts-results">
+  <h3>{{title}}</h3>
 
-  <div class="form-group">
-    <label>Match</label>
-    <label><input type="radio" name="match" value="all" checked> All tags (AND)</label>
-    <label><input type="radio" name="match" value="any"> Any tag (OR)</label>
-  </div>
+  {{#if notes.length}}
+    <h4>Notes</h4>
+    <ol class="pts-list">
+      {{#each notes}}
+        <li>
+          <button type="button" data-action="pan" data-type="{{type}}" data-id="{{id}}">
+            {{name}}
+          </button>
+        </li>
+      {{/each}}
+    </ol>
+  {{/if}}
 
-  <div class="form-group">
-    <label>Display</label>
-    <label><input type="radio" name="mode" value="map" checked> Show on map</label>
-    <label><input type="radio" name="mode" value="list"> List view</label>
-  </div>
+  {{#if regions.length}}
+    <h4>Regions</h4>
+    <ol class="pts-list">
+      {{#each regions}}
+        <li>
+          <button type="button" data-action="pan" data-type="{{type}}" data-id="{{id}}">
+            {{name}}
+          </button>
+        </li>
+      {{/each}}
+    </ol>
+  {{/if}}
 
-  <div class="buttons">
-    <button type="button" data-action="show"><i class="fa-solid fa-eye"></i> Show</button>
-    <button type="button" data-action="clear"><i class="fa-solid fa-xmark"></i> Clear</button>
-  </div>
-</form>
+  {{#unless notes.length}}
+    {{#unless regions.length}}
+      <p><em>No matching POIs in this scene.</em></p>
+    {{/unless}}
+  {{/unless}}
+</section>

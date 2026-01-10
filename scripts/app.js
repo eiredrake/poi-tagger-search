@@ -1,4 +1,11 @@
-const MODULE_ID = "poi-tagger-search";
+import PTSLogger from "./logger.js";
+import { MODULE_ID, SOCKET, PROTOCOL_VERSION } from "./constants.js";
+
+const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
+
+/* -------------------------------------------- */
+/* Utilities                                    */
+/* -------------------------------------------- */
 
 function parseTags(str) {
   return (str ?? "")
@@ -7,126 +14,254 @@ function parseTags(str) {
     .filter(Boolean);
 }
 
-export class POISearchApp extends foundry.applications.api.ApplicationV2 {
-  constructor(opts = {}) {
-    super();
-    this.moduleId = opts.moduleId ?? MODULE_ID;
-    this.socket = opts.socket ?? `module.${this.moduleId}`;
-  }
+function taggerAvailable() {
+  return (
+    game.modules.get("tagger")?.active &&
+    typeof Tagger?.getByTag === "function"
+  );
+}
 
+/* -------------------------------------------- */
+/* Query Application                             */
+/* -------------------------------------------- */
+
+export class PTSQueryApp extends HandlebarsApplicationMixin(ApplicationV2) {
   static DEFAULT_OPTIONS = {
     id: "poi-tagger-search-query",
-    window: { title: "POI Tag Reveal", resizable: false },
-    position: { width: 360 },
+    window: { title: "Poi Tagger Search", resizable: false },
+    position: { width: 380 },
     classes: ["poi-tagger-search"],
     actions: {
-      show: POISearchApp.#onShow,
-      clear: POISearchApp.#onClear
+      search: PTSQueryApp.#onSearch,
+      clear: PTSQueryApp.#onClear
     }
   };
 
-  async _renderHTML() {
-    return await renderTemplate(`modules/${this.moduleId}/templates/query.hbs`, {
-      defaultMode: "map",
-      defaultMatch: "all"
-    });
+  static PARTS = {
+    content: {
+      template: `modules/${MODULE_ID}/templates/query.hbs`
+    }
+  };
+
+  async _prepareContext() {
+    return {
+      defaults: {
+        mode: "map",
+        match: "all",
+        targets: "both"
+      }
+    };
   }
 
-  static async #onShow(event, target) {
+  /* -------------------------------------------- */
+  /* Actions                                      */
+  /* -------------------------------------------- */
+
+  static async #onClear(event, target) {
     const app = this;
-    const root = target.closest(".poi-tr-root") ?? app.element;
+    const root = target.closest(".pts-root") ?? app.element;
 
-    const tagsStr = root.querySelector('[name="tags"]')?.value ?? "";
-    const mode = root.querySelector('[name="mode"]:checked')?.value ?? "map";
-    const match = root.querySelector('[name="match"]:checked')?.value ?? "all";
+    const audience = root.querySelector('[name="audience"]:checked')?.value ?? "me";
+    const payload = { v: PROTOCOL_VERSION, action: "clear" };
 
-    if (!game.modules.get("tagger")?.active) {
-      ui.notifications.error("Tagger module is required and must be active.");
+    // Always clear locally
+    game.modules.get(MODULE_ID)?.api?.dispatch?.(payload);
+
+    // Broadcast only if requested
+    if (audience === "everyone") {
+      game.socket.emit(SOCKET, payload);
+    }
+  }
+
+
+  static async #onSearch(event, target) {
+    PTSLogger.log("Search button clicked");
+
+    const app = this;
+    const root = target.closest(".pts-root") ?? app.element;
+
+    if (!taggerAvailable()) {
+      ui.notifications.error("Tagger must be installed and enabled.");
       return;
     }
 
-    const tags = parseTags(tagsStr);
+    const tags = parseTags(root.querySelector('[name="tags"]')?.value);
     if (!tags.length) {
       ui.notifications.warn("Enter at least one tag.");
       return;
     }
 
-    const opts = {
-      sceneId: canvas.scene.id,
-      caseInsensitive: true,
-      matchAny: match === "any"
-    };
+    const mode = root.querySelector('[name="mode"]:checked')?.value ?? "map";
+    const match = root.querySelector('[name="match"]:checked')?.value ?? "all";
+    const targets = root.querySelector('[name="targets"]:checked')?.value ?? "both";
+    const audience = root.querySelector('[name="audience"]:checked')?.value ?? "me";
 
-    // Tagger returns Documents; we only want NoteDocuments in this scene
-    const docs = Tagger.getByTag(tags, opts) ?? [];
-    const noteIds = docs
-      .filter(d => d?.documentName === "Note")
-      .map(d => d.id);
+    let docs;
+    try {
+      docs = Tagger.getByTag(tags, {
+        sceneId: canvas.scene.id,
+        caseInsensitive: true,
+        matchAny: match === "any"
+      }) ?? [];
+    } catch (err) {
+      PTSLogger.error("Tagger query failed", err);
+      ui.notifications.error("Tagger query failed. See console.");
+      return;
+    }
 
-    // Broadcast to all clients
-    game.socket.emit(app.socket, {
+    const noteIds = [];
+    const regionIds = [];
+
+    for (const d of docs) {
+      if (!d) continue;
+
+      if (
+        (targets === "notes" || targets === "both") &&
+        d.documentName === "Note"
+      ) {
+        noteIds.push(d.id);
+      }
+
+      if (
+        (targets === "regions" || targets === "both") &&
+        d.documentName === "Region"
+      ) {
+        regionIds.push(d.id);
+      }
+    }
+
+    const title = `PTS: ${tags.join(", ")} (${match.toUpperCase()})`;
+
+    PTSLogger.log("Search executed", {
+      tags,
+      match,
+      targets,
+      notes: noteIds.length,
+      regions: regionIds.length
+    });
+
+    const payload = {
+      v: PROTOCOL_VERSION,
       action: "show",
       mode,
+      title,
       noteIds,
-      title: `POIs: ${tags.join(", ")}`
-    });
-  }
+      regionIds
+    };
 
-  static async #onClear() {
-    const app = this;
-    game.socket.emit(app.socket, { action: "clear" });
+    // Always apply locally
+    game.modules.get(MODULE_ID)?.api?.dispatch?.(payload);
+
+    PTSLogger.log("Broadcast decision", { audience, willEmit: audience === "everyone" });
+
+    // Broadcast only if requested
+    if (audience === "everyone") {
+      game.socket.emit(SOCKET, payload);
+    }
   }
 }
 
-export class POIListApp extends foundry.applications.api.ApplicationV2 {
+/* -------------------------------------------- */
+/* Results List Application                      */
+/* -------------------------------------------- */
+
+export class PTSResultsListApp extends HandlebarsApplicationMixin(ApplicationV2) {
   static DEFAULT_OPTIONS = {
-    id: "poi-tagger-search-list",
-    window: { title: "POI Results", resizable: true },
-    position: { width: 360, height: 480 },
+    id: "poi-tagger-search-results",
+    window: { title: "Poi Tagger Search", resizable: true },
+    position: { width: 420, height: 520 },
     classes: ["poi-tagger-search"],
     actions: {
-      pan: POIListApp.#onPan
+      pan: PTSResultsListApp.#onPan
+    }
+  };
+
+  static PARTS = {
+    content: {
+      template: `modules/${MODULE_ID}/templates/list.hbs`
     }
   };
 
   constructor() {
     super();
-    this.noteIds = [];
-    this.titleText = "POI Results";
+    this._title = "Poi Tagger Search";
+    this._noteIds = [];
+    this._regionIds = [];
   }
 
   render(force, ctx = {}) {
-    if (ctx?.noteIds) this.noteIds = ctx.noteIds;
-    if (ctx?.title) this.titleText = ctx.title;
+    if (ctx?.title) this._title = ctx.title;
+    if (Array.isArray(ctx?.noteIds)) this._noteIds = ctx.noteIds;
+    if (Array.isArray(ctx?.regionIds)) this._regionIds = ctx.regionIds;
     return super.render(force);
   }
 
-  async _renderHTML() {
-    const placeables = canvas?.notes?.placeables ?? [];
-    const byId = new Map(placeables.map(n => [n.document.id, n]));
+  async _prepareContext() {
+    const notesById = new Map(
+      (canvas.notes?.placeables ?? []).map(n => [n.document.id, n])
+    );
 
-    const rows = this.noteIds
-      .map(id => byId.get(id))
+    const regionsById = new Map(
+      (canvas.regions?.placeables ?? []).map(r => [r.document.id, r])
+    );
+
+    const notes = this._noteIds
+      .map(id => notesById.get(id))
       .filter(Boolean)
       .map(n => ({
         id: n.document.id,
-        name: n.document.text?.trim() || n.document.label || "POI",
-        x: n.document.x,
-        y: n.document.y
+        type: "note",
+        name: (n.document.text ?? "").trim() || n.document.label || "Map Note"
       }));
 
-    return await renderTemplate(`modules/${MODULE_ID}/templates/list.hbs`, {
-      title: this.titleText,
-      rows
-    });
+    const regions = this._regionIds
+      .map(id => regionsById.get(id))
+      .filter(Boolean)
+      .map(r => ({
+        id: r.document.id,
+        type: "region",
+        name: r.document.name || r.document.label || "Region"
+      }));
+
+    return {
+      title: this._title,
+      notes,
+      regions
+    };
   }
 
-  static async #onPan(event, target) {
-    const id = target.dataset.noteId;
-    const note = (canvas?.notes?.placeables ?? []).find(n => n.document.id === id);
-    if (!note) return;
+  /* -------------------------------------------- */
+  /* Actions                                      */
+  /* -------------------------------------------- */
 
-    const { x, y } = note.document;
-    canvas.animatePan({ x, y, scale: canvas.stage.scale.x });
+  static async #onPan(event, target) {
+    const { id, type } = target.dataset;
+    if (!canvas?.ready) return;
+
+    if (type === "note") {
+      const note = canvas.notes.placeables.find(n => n.document.id === id);
+      if (!note) return;
+      canvas.animatePan({
+        x: note.document.x,
+        y: note.document.y,
+        scale: canvas.stage.scale.x
+      });
+      return;
+    }
+
+    if (type === "region") {
+      const region = canvas.regions.placeables.find(r => r.document.id === id);
+      if (!region) return;
+
+      const b = region.bounds;
+      const x = b ? b.x + b.width / 2 : region.document.x ?? 0;
+      const y = b ? b.y + b.height / 2 : region.document.y ?? 0;
+
+      canvas.animatePan({
+        x,
+        y,
+        scale: canvas.stage.scale.x
+      });
+    }
   }
 }
